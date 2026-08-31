@@ -28,8 +28,7 @@ Grab the latest build from the [Releases page](https://github.com/Zhibarie/Morph
 - ✅ Always uses the **latest dev release** of `MorpheApp/morphe-patches`
 - ✅ Builds both **Magisk module** and **standalone APK** for each app
 - ✅ Three APK sources for redundancy (archive.org, APKMirror, Uptodown)
-- ✅ Automatic daily build via GitHub Actions (23:00 WIB / 16:00 UTC)
-- ✅ Telegram notification to [@Tiegerism](https://t.me/Tiegerism) on every successful build
+- ✅ Automatic daily build via GitHub Actions (23:00 WIB / 16:00 UTC) 
 - ✅ Module auto-update via Magisk app (no manual reflash needed)
 - ✅ Supports Magisk and KernelSU
 
