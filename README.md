@@ -3,7 +3,6 @@
 [![Build Modules](https://github.com/Zhibarie/Morphe-Magisk-Module/actions/workflows/build.yml/badge.svg)](https://github.com/Zhibarie/Morphe-Magisk-Module/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/Zhibarie/Morphe-Magisk-Module?label=Latest%20Release)](https://github.com/Zhibarie/Morphe-Magisk-Module/releases/latest)
 [![Patch Version](https://img.shields.io/badge/Patches-Morphe%20Dev-blue)](https://github.com/MorpheApp/morphe-patches/releases)
-[![Telegram](https://img.shields.io/badge/Telegram-@Tiegerism-2CA5E0?logo=telegram&logoColor=white)](https://t.me/Tiegerism)
 
 > Auto-build **YouTube** and **YouTube Music** with the latest **Morphe dev patches**, refreshed daily.
 
