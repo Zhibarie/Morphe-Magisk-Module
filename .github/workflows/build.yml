@@ -1,4 +1,9 @@
 name: Build Modules
+
+concurrency:
+  group: build-modules-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_call:
     inputs:
@@ -25,6 +30,17 @@ jobs:
           fetch-depth: 0
           submodules: true
 
+      - name: Cache stock APKs
+        id: cache-apks
+        uses: actions/cache@v4
+        with:
+          path: |
+            temp
+          key: stock-apks-${{ hashFiles('config.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            stock-apks-${{ hashFiles('config.toml') }}-
+            stock-apks-
+
       - name: Update config
         if: ${{ inputs.from_ci }}
         run: |
@@ -44,20 +60,6 @@ jobs:
           if [ -z "$TAG" ]; then TAG=0; fi
           echo "NEXT_VER_CODE=$((TAG + 1))" >> $GITHUB_OUTPUT
 
-            # ... step sebelumnya (Get next version code)
-
-      - name: Cache stock APKs
-        id: cache-apks
-        uses: actions/cache@v4
-        with:
-          path: |
-            temp
-            build
-          key: stock-apks-${{ hashFiles('config.toml') }}-${{ github.run_id }}
-          restore-keys: |
-            stock-apks-${{ hashFiles('config.toml') }}-
-            stock-apks-
-
       - name: Build modules/APKs
         run: if [ -f "config.json" ]; then ./build.sh config.json; else ./build.sh config.toml; fi
         env:
@@ -73,18 +75,69 @@ jobs:
           cat build.md >> "$GITHUB_OUTPUT"
           echo "${DELIM}" >> "$GITHUB_OUTPUT"
           cp -f build.md build.tmp
-      
-      - name: Upload release
+
+      - name: Separate dev and stable files
+        id: separate
+        run: |
+          mkdir -p build-dev build-stable
+          cd build
+          for f in *; do
+            if [[ "$f" == *"morphe-dev-"* ]]; then
+              mv "$f" ../build-dev/
+            elif [[ "$f" == *"morphe-stable-"* ]]; then
+              mv "$f" ../build-stable/
+            else
+              # Default: kalau tidak ada label, masukin ke stable
+              mv "$f" ../build-stable/
+            fi
+          done
+          cd ..
+          echo "Dev files:"
+          ls -la build-dev/ || echo "(empty)"
+          echo ""
+          echo "Stable files:"
+          ls -la build-stable/ || echo "(empty)"
+
+      - name: Upload STABLE release (marked as Latest)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
           BODY: ${{ steps.get_output.outputs.BUILD_LOG }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "Release" --notes "$BODY"
-            gh release upload "$TAG" ./build/* --clobber
+          if [ -n "$(ls -A build-stable 2>/dev/null)" ]; then
+            if gh release view "stable-$TAG" >/dev/null 2>&1; then
+              gh release edit "stable-$TAG" --title "Stable v$TAG" --notes "$BODY"
+              gh release upload "stable-$TAG" build-stable/* --clobber
+            else
+              gh release create "stable-$TAG" build-stable/* \
+                --title "Stable v$TAG" \
+                --notes "$BODY" \
+                --latest
+            fi
+            echo "✅ Stable release uploaded"
           else
-            gh release create "$TAG" ./build/* --title "Release" --notes "$BODY"
+            echo "⚠️ No stable files to upload"
+          fi
+
+      - name: Upload DEV release (marked as Pre-release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
+          BODY: ${{ steps.get_output.outputs.BUILD_LOG }}
+        run: |
+          if [ -n "$(ls -A build-dev 2>/dev/null)" ]; then
+            if gh release view "dev-$TAG" >/dev/null 2>&1; then
+              gh release edit "dev-$TAG" --title "Dev v$TAG (Pre-release)" --notes "$BODY"
+              gh release upload "dev-$TAG" build-dev/* --clobber
+            else
+              gh release create "dev-$TAG" build-dev/* \
+                --title "Dev v$TAG (Pre-release)" \
+                --notes "$BODY" \
+                --prerelease
+            fi
+            echo "✅ Dev release uploaded"
+          else
+            echo "⚠️ No dev files to upload"
           fi
 
       - name: Update modules changelog and update json
@@ -101,18 +154,24 @@ jobs:
           }"
           }
 
-          cd build || { echo "build folder not found"; exit 1; }
-          for OUTPUT in *module*.zip; do
-            [ "$OUTPUT" = "*module*.zip" ] && continue
+          # Process all module zips (both dev and stable)
+          for OUTPUT in build-stable/*module*.zip build-dev/*module*.zip; do
+            [ -f "$OUTPUT" ] || continue
             ZIP_S=$(unzip -p "$OUTPUT" module.prop)
             if ! UPDATE_JSON=$(echo "$ZIP_S" | grep updateJson); then continue; fi
             UPDATE_JSON="${UPDATE_JSON##*/}"
             VER=$(echo "$ZIP_S" | grep version=)
             VER="${VER##*=}"
-            DLURL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT}"
-            get_update_json "$VER" "$DLURL" >"../$UPDATE_JSON"
+
+            # Determine if dev or stable based on filename
+            if [[ "$OUTPUT" == *"morphe-dev-"* ]]; then
+              DLURL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/$(basename "$OUTPUT")"
+            else
+              DLURL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/stable-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/$(basename "$OUTPUT")"
+            fi
+
+            get_update_json "$VER" "$DLURL" >"$UPDATE_JSON"
           done
-          cd ..
 
           find . -name "*-update.json" | grep . || : >dummy-update.json
 
@@ -120,9 +179,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      
+
           git add build.md *-update.json
-      
+
           if ! git diff --cached --quiet; then
             git commit -m "Bump version ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}"
             git push origin HEAD:update
@@ -135,36 +194,84 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
         if: env.TG_TOKEN != null
         run: |
-          cd build || { echo "build folder not found"; exit 1; }
+          (
+            TG_CHAT="1067754962"
+            NL=$'\n'
+            APKS=""
+            MODULES=""
+            STABLE_LINKS=""
+            DEV_LINKS=""
 
-          TG_CHAT="1067754962"
-          NL=$'\n'
-          APKS=""
-          MODULES=""
-          for OUTPUT in *; do
-            DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT}"
-            if [[ $OUTPUT = *.apk ]]; then
-              APKS+="${NL}📦[${OUTPUT}](${DL_URL})"
-            elif [[ $OUTPUT = *.zip ]]; then
-              MODULES+="${NL}📦[${OUTPUT}](${DL_URL})"
-            fi
-          done
-          MODULES=${MODULES#"$NL"}
-          APKS=${APKS#"$NL"}
+            # Collect stable links
+            for OUTPUT in build-stable/*; do
+              [ -f "$OUTPUT" ] || continue
+              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/stable-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-stable/}"
+              if [[ $OUTPUT = *.apk ]]; then
+                STABLE_LINKS+="${NL}📦[${OUTPUT#build-stable/}](${DL_URL})"
+              elif [[ $OUTPUT = *.zip ]]; then
+                STABLE_LINKS+="${NL}📦[${OUTPUT#build-stable/}](${DL_URL})"
+              fi
+            done
 
-          BODY="$(sed 's/^\* \*\*/↪ \*\*/g; s/^\* `/↪ \*\*/g; s/`/\*/g; s/^\* /\↪/g; s/\*\*/\*/g; s/###//g; s/^- /↪ /g; /^==/d;' ../build.md)"
-          MSG="*New build!*
+            # Collect dev links
+            for OUTPUT in build-dev/*; do
+              [ -f "$OUTPUT" ] || continue
+              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-dev/}"
+              if [[ $OUTPUT = *.apk ]]; then
+                DEV_LINKS+="${NL}📦[${OUTPUT#build-dev/}](${DL_URL})"
+              elif [[ $OUTPUT = *.zip ]]; then
+                DEV_LINKS+="${NL}📦[${OUTPUT#build-dev/}](${DL_URL})"
+              fi
+            done
+
+            STABLE_LINKS=${STABLE_LINKS#"$NL"}
+            DEV_LINKS=${DEV_LINKS#"$NL"}
+
+            BODY="$(sed 's/^\* \*\*/↪ \*\*/g; s/^\* `/↪ \*\*/g; s/`/\*/g; s/^\* /\↪/g; s/\*\*/\*/g; s/###//g; s/^- /↪ /g; /^==/d;' build.tmp)"
+
+            MSG="*🚀 New Morphe Build!*
+
+          📅 $(date -u +'%Y-%m-%d %H:%M UTC')
+          🏷 Build v${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
 
           ${BODY}
 
-          *▼ Download Links:*
-          Modules:
-          ${MODULES}
+          *▼ Stable Release:*
+          ${STABLE_LINKS:-_(no stable files)_}
 
-          APKs:
-          ${APKS}
+          *▼ Dev Release (Pre-release):*
+          ${DEV_LINKS:-_(no dev files)_}
           "
-          echo "'$MSG'"
-          MSG=${MSG:0:9450}
-          POST="https://api.telegram.org/bot${TG_TOKEN}/sendMessage"
-          curl -X POST --data-urlencode "parse_mode=Markdown" --data-urlencode "disable_web_page_preview=true" --data-urlencode "text=${MSG}" --data-urlencode "chat_id=${TG_CHAT}" "$POST"
+
+            POST="https://api.telegram.org/bot${TG_TOKEN}/sendMessage"
+            for attempt in 1 2 3; do
+              RESPONSE=$(curl -sS --max-time 10 -X POST \
+                --data-urlencode "parse_mode=Markdown" \
+                --data-urlencode "disable_web_page_preview=true" \
+                --data-urlencode "text=${MSG:0:9450}" \
+                --data-urlencode "chat_id=${TG_CHAT}" \
+                "$POST")
+              if echo "$RESPONSE" | grep -q '"ok":true'; then
+                echo "✅ Telegram notif sent (attempt $attempt)"
+                break
+              fi
+              echo "⚠️ Attempt $attempt failed, retrying in 5s..."
+              sleep 5
+            done
+          ) &
+          echo "Telegram notification dispatched in background"
+
+      - name: Cleanup old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🧹 Cleaning up releases older than the latest 10 (both dev and stable)..."
+          OLD_TAGS=$(gh release list -L 100 --json tagName -q '.[].tagName' | tail -n +21)
+          if [ -z "$OLD_TAGS" ]; then
+            echo "✅ No old releases to clean."
+          else
+            for tag in $OLD_TAGS; do
+              echo "🗑️  Deleting release $tag..."
+              gh release delete "$tag" --yes --cleanup-tag || true
+            done
+          fi
