@@ -299,4 +299,269 @@ jobs:
               echo "🗑️  Deleting release $tag..."
               gh release delete "$tag" --yes --cleanup-tag || true
             done
+          fi          path: |
+            temp
+          key: stock-apks-${{ hashFiles('config.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            stock-apks-${{ hashFiles('config.toml') }}-
+            stock-apks-
+
+      - name: Update config
+        if: ${{ inputs.from_ci }}
+        run: |
+          if git checkout origin/update build.md; then
+            UPDATE_CFG=$(./build.sh config.toml --config-update)
+            if [ "$UPDATE_CFG" ]; then
+              echo "$UPDATE_CFG" > config.json
+            fi
+          fi
+
+      - name: Get next version code
+        id: next_ver_code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ambil semua tag release, filter hanya yang numeric murni (1, 2, 3, ...)
+          # lalu ambil angka tertinggi. Tag seperti 'dev-4' / 'stable-4' / 'dev--3'
+          # akan diabaikan agar tidak merusak arithmetic.
+          TAG=$(gh release list -L 100 --json tagName -q '.[].tagName' \
+                | grep -E '^[0-9]+$' \
+                | sort -n \
+                | tail -1)
+          if [ -z "$TAG" ]; then
+            TAG=0
+            echo "⚠️  No numeric release tag found, starting from 1"
+          else
+            echo "✅ Latest numeric tag: $TAG"
+          fi
+          NEXT_VER_CODE=$((TAG + 1))
+          echo "NEXT_VER_CODE=$NEXT_VER_CODE" >> $GITHUB_OUTPUT
+          echo "Next version code: $NEXT_VER_CODE"
+
+      - name: Cleanup broken tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Hapus tag dengan format aneh (double dash) dari bug workflow sebelumnya
+          for tag in $(gh release list -L 100 --json tagName -q '.[].tagName'); do
+            if [[ "$tag" == *"--"* ]]; then
+              echo "🗑️  Removing broken tag: $tag"
+              gh release delete "$tag" --yes --cleanup-tag || true
+            fi
+          done
+
+      - name: Build modules/APKs
+        run: if [ -f "config.json" ]; then ./build.sh config.json; else ./build.sh config.toml; fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: $GITHUB_REPOSITORY
+          NEXT_VER_CODE: ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
+
+      - name: Get output
+        id: get_output
+        run: |
+          DELIM="$(openssl rand -hex 8)"
+          echo "BUILD_LOG<<${DELIM}" >> "$GITHUB_OUTPUT"
+          cat build.md >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+          cp -f build.md build.tmp
+
+      - name: Separate dev and stable files
+        id: separate
+        run: |
+          mkdir -p build-dev build-stable
+          cd build
+          for f in *; do
+            if [[ "$f" == *"morphe-dev-"* ]]; then
+              mv "$f" ../build-dev/
+            elif [[ "$f" == *"morphe-stable-"* ]]; then
+              mv "$f" ../build-stable/
+            else
+              # Default: kalau tidak ada label, masukin ke stable
+              mv "$f" ../build-stable/
+            fi
+          done
+          cd ..
+          echo "Dev files:"
+          ls -la build-dev/ || echo "(empty)"
+          echo ""
+          echo "Stable files:"
+          ls -la build-stable/ || echo "(empty)"
+
+      - name: Upload STABLE release (marked as Latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
+          BODY: ${{ steps.get_output.outputs.BUILD_LOG }}
+        run: |
+          if [ -n "$(ls -A build-stable 2>/dev/null)" ]; then
+            if gh release view "stable-$TAG" >/dev/null 2>&1; then
+              gh release edit "stable-$TAG" --title "Stable v$TAG" --notes "$BODY"
+              gh release upload "stable-$TAG" build-stable/* --clobber
+            else
+              gh release create "stable-$TAG" build-stable/* \
+                --title "Stable v$TAG" \
+                --notes "$BODY" \
+                --latest
+            fi
+            echo "✅ Stable release uploaded"
+          else
+            echo "⚠️ No stable files to upload"
+          fi
+
+      - name: Upload DEV release (marked as Pre-release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
+          BODY: ${{ steps.get_output.outputs.BUILD_LOG }}
+        run: |
+          if [ -n "$(ls -A build-dev 2>/dev/null)" ]; then
+            if gh release view "dev-$TAG" >/dev/null 2>&1; then
+              gh release edit "dev-$TAG" --title "Dev v$TAG (Pre-release)" --notes "$BODY"
+              gh release upload "dev-$TAG" build-dev/* --clobber
+            else
+              gh release create "dev-$TAG" build-dev/* \
+                --title "Dev v$TAG (Pre-release)" \
+                --notes "$BODY" \
+                --prerelease
+            fi
+            echo "✅ Dev release uploaded"
+          else
+            echo "⚠️ No dev files to upload"
+          fi
+
+      - name: Update modules changelog and update json
+        id: update_config
+        run: |
+          git checkout -f update || git switch --discard-changes --orphan update
+          cp -f build.tmp build.md
+          get_update_json() {
+            echo "{
+            \"version\": \"$1\",
+            \"versionCode\": ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }},
+            \"zipUrl\": \"$2\",
+            \"changelog\": \"https://raw.githubusercontent.com/$GITHUB_REPOSITORY/update/build.md\"
+          }"
+          }
+
+          # Process all module zips (both dev and stable)
+          for OUTPUT in build-stable/*module*.zip build-dev/*module*.zip; do
+            [ -f "$OUTPUT" ] || continue
+            ZIP_S=$(unzip -p "$OUTPUT" module.prop)
+            if ! UPDATE_JSON=$(echo "$ZIP_S" | grep updateJson); then continue; fi
+            UPDATE_JSON="${UPDATE_JSON##*/}"
+            VER=$(echo "$ZIP_S" | grep version=)
+            VER="${VER##*=}"
+
+            # Determine if dev or stable based on filename
+            if [[ "$OUTPUT" == *"morphe-dev-"* ]]; then
+              DLURL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/$(basename "$OUTPUT")"
+            else
+              DLURL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/stable-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/$(basename "$OUTPUT")"
+            fi
+
+            get_update_json "$VER" "$DLURL" >"$UPDATE_JSON"
+          done
+
+          find . -name "*-update.json" | grep . || : >dummy-update.json
+
+      - name: Commit module json changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add build.md *-update.json
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Bump version ${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}"
+            git push origin HEAD:update
+          else
+            echo "no changes!"
+          fi
+
+      - name: Report to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        if: env.TG_TOKEN != null
+        run: |
+          (
+            TG_CHAT="1067754962"
+            NL=$'\n'
+            APKS=""
+            MODULES=""
+            STABLE_LINKS=""
+            DEV_LINKS=""
+
+            # Collect stable links
+            for OUTPUT in build-stable/*; do
+              [ -f "$OUTPUT" ] || continue
+              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/stable-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-stable/}"
+              if [[ $OUTPUT = *.apk ]]; then
+                STABLE_LINKS+="${NL}📦[${OUTPUT#build-stable/}](${DL_URL})"
+              elif [[ $OUTPUT = *.zip ]]; then
+                STABLE_LINKS+="${NL}📦[${OUTPUT#build-stable/}](${DL_URL})"
+              fi
+            done
+
+            # Collect dev links
+            for OUTPUT in build-dev/*; do
+              [ -f "$OUTPUT" ] || continue
+              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-dev/}"
+              if [[ $OUTPUT = *.apk ]]; then
+                DEV_LINKS+="${NL}📦[${OUTPUT#build-dev/}](${DL_URL})"
+              elif [[ $OUTPUT = *.zip ]]; then
+                DEV_LINKS+="${NL}📦[${OUTPUT#build-dev/}](${DL_URL})"
+              fi
+            done
+
+            STABLE_LINKS=${STABLE_LINKS#"$NL"}
+            DEV_LINKS=${DEV_LINKS#"$NL"}
+
+            BODY="$(sed 's/^\* \*\*/↪ \*\*/g; s/^\* `/↪ \*\*/g; s/`/\*/g; s/^\* /\↪/g; s/\*\*/\*/g; s/###//g; s/^- /↪ /g; /^==/d;' build.tmp)"
+
+            MSG="*🚀 New Morphe Build!*
+
+          📅 $(date -u +'%Y-%m-%d %H:%M UTC')
+          🏷 Build v${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}
+
+          ${BODY}
+
+          *▼ Stable Release:*
+          ${STABLE_LINKS:-_(no stable files)_}
+
+          *▼ Dev Release (Pre-release):*
+          ${DEV_LINKS:-_(no dev files)_}
+          "
+
+            POST="https://api.telegram.org/bot${TG_TOKEN}/sendMessage"
+            for attempt in 1 2 3; do
+              RESPONSE=$(curl -sS --max-time 10 -X POST \
+                --data-urlencode "parse_mode=Markdown" \
+                --data-urlencode "disable_web_page_preview=true" \
+                --data-urlencode "text=${MSG:0:9450}" \
+                --data-urlencode "chat_id=${TG_CHAT}" \
+                "$POST")
+              if echo "$RESPONSE" | grep -q '"ok":true'; then
+                echo "✅ Telegram notif sent (attempt $attempt)"
+                break
+              fi
+              echo "⚠️ Attempt $attempt failed, retrying in 5s..."
+              sleep 5
+            done
+          ) &
+          echo "Telegram notification dispatched in background"
+
+      - name: Cleanup old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🧹 Cleaning up releases older than the latest 10 (both dev and stable)..."
+          OLD_TAGS=$(gh release list -L 100 --json tagName -q '.[].tagName' | tail -n +21)
+          if [ -z "$OLD_TAGS" ]; then
+            echo "✅ No old releases to clean."
+          else
+            for tag in $OLD_TAGS; do
+              echo "🗑️  Deleting release $tag..."
+              gh release delete "$tag" --yes --cleanup-tag || true
+            done
           fi
