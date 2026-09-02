@@ -56,18 +56,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ambil semua tag release, filter hanya yang numeric murni (1, 2, 3, ...)
-          # lalu ambil angka tertinggi. Tag seperti 'dev-4' / 'stable-4' / 'dev--3'
-          # akan diabaikan agar tidak merusak arithmetic.
           TAG=$(gh release list -L 100 --json tagName -q '.[].tagName' \
                 | grep -E '^[0-9]+$' \
                 | sort -n \
                 | tail -1)
           if [ -z "$TAG" ]; then
             TAG=0
-            echo "⚠️  No numeric release tag found, starting from 1"
+            echo "No numeric release tag found, starting from 1"
           else
-            echo "✅ Latest numeric tag: $TAG"
+            echo "Latest numeric tag: $TAG"
           fi
           NEXT_VER_CODE=$((TAG + 1))
           echo "NEXT_VER_CODE=$NEXT_VER_CODE" >> $GITHUB_OUTPUT
@@ -77,10 +74,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Hapus tag dengan format aneh (double dash) dari bug workflow sebelumnya
           for tag in $(gh release list -L 100 --json tagName -q '.[].tagName'); do
             if [[ "$tag" == *"--"* ]]; then
-              echo "🗑️  Removing broken tag: $tag"
+              echo "Removing broken tag: $tag"
               gh release delete "$tag" --yes --cleanup-tag || true
             fi
           done
@@ -138,9 +134,9 @@ jobs:
                 --notes "$BODY" \
                 --latest
             fi
-            echo "✅ Stable release uploaded"
+            echo "Stable release uploaded"
           else
-            echo "⚠️ No stable files to upload"
+            echo "No stable files to upload"
           fi
 
       - name: Upload DEV release (marked as Pre-release)
@@ -159,9 +155,9 @@ jobs:
                 --notes "$BODY" \
                 --prerelease
             fi
-            echo "✅ Dev release uploaded"
+            echo "Dev release uploaded"
           else
-            echo "⚠️ No dev files to upload"
+            echo "No dev files to upload"
           fi
 
       - name: Update modules changelog and update json
