@@ -47,7 +47,7 @@ if [ -d revanced-magisk-module ] || [ -f config.toml ]; then
 	fi
 else
 	pr "Cloning revanced-magisk-module."
-	git clone https://github.com/j-hc/revanced-magisk-module --depth 1
+	git clone https://github.com/Zhibarie/Morphe-Magisk-Module --depth 1
 	cd revanced-magisk-module
 	sed -i '/^enabled.*/d; /^\[.*\]/a enabled = false' config.toml
 	grep -q 'revanced-magisk-module' ~/.gitconfig 2>/dev/null ||
