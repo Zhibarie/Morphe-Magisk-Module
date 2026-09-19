@@ -1,3 +1,21 @@
+# =============================================================================
+# Morphe Magisk Module — Build Configuration (refactored)
+# =============================================================================
+# Centralized defaults live in the top-level (main) section below.
+# Per-app sections only need to override what they want changed
+# (e.g., patches-version = "dev" for pre-release builds).
+#
+# Version selectors supported:
+#   "latest"  → newest stable release (excludes pre-releases)
+#   "stable"  → alias for "latest"
+#   "dev"     → newest dev/pre-release tag (highest semver, incl. -dev.N)
+#   "v1.16.0" → pin to an explicit tag (the leading "v" is optional)
+#
+# Source selectors can be any "OWNER/REPO" string on GitHub.
+# Defaults point to the renamed repository "MorpheApp/morphe-desktop"
+# (it used to be "MorpheApp/morphe-cli"; relying on the redirect was fragile).
+# =============================================================================
+
 enable-module-update = true
 parallel-jobs = 1
 compression-level = 9
@@ -13,8 +31,26 @@ patches-version = "latest"
 
 rv-brand        = "Morphe"
 
-# Cache policy is configured via env vars in .github/workflows/build.yml
-# (see CACHE_RETENTION_COUNT, CACHE_FALLBACK_ALLOWED, etc.)
+# ---- Cache policy (consumed by cache.sh) ----
+# IMPORTANT: We deliberately do NOT put cache policy in a [cache] table here
+# because build.sh and config_update() iterate ALL tables in this file
+# and would try to build a phantom "cache" app. Instead, configure these
+# via environment variables in .github/workflows/build.yml.
+#
+# Available env vars (with defaults):
+#   CACHE_RETENTION_COUNT    = 2      (keep N stale versions per kind for rollback)
+#   CACHE_RETENTION_AGE_DAYS = 30     (delete stale entries older than N days; 0 = disable)
+#   CACHE_FALLBACK_ALLOWED   = true   (use stale cache when fresh download fails)
+#   CACHE_FALLBACK_STATUS    = stale  (which statuses are eligible for fallback)
+#   CACHE_LOCK_TIMEOUT       = 30     (seconds to wait for flock)
+
+# =============================================================================
+# App configurations
+# =============================================================================
+# Set patches-version per-app to differentiate "dev" vs "stable" builds.
+# The CLI version is shared (inherited from main) by default — bumping the
+# CLI in one place automatically updates every app.
+# =============================================================================
 
 # ---------- YouTube (Dev / Prerelease) ----------
 [YouTube-Morphe-Dev]
