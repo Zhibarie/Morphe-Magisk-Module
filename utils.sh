@@ -339,13 +339,12 @@ get_prebuilts() {
                 # fallback if download fails. Returns the local path on stdout.
                 local url="https://github.com/${src}/releases/download/${tag_name}/${asset_name}"
                 local expected_file
-                if ! expected_file=$(cache_get "$identity" "$url" 2>&1); then
+                if ! expected_file=$(cache_get "$identity" "$url"); then
                         epr "cache_get failed for $tag ($src @ $ver)"
                         return 1
                 fi
                 # cache_get may have logged to stderr; the actual file path is the
                 # last line of stdout that doesn't start with [CACHE].
-                expected_file=$(grep -v '^\[CACHE\]' <<<"$expected_file" | tail -1)
                 [ -f "$expected_file" ] || {
                         epr "cache_get returned no usable path for $tag"
                         return 1
