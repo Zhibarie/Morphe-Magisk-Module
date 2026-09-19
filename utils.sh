@@ -318,7 +318,7 @@ get_prebuilts() {
 
                 ipr "Resolving $tag: $src @ $ver"
                 local identity
-                if ! identity=$(cache_resolve_identity "$src" "$ver" "linux" "$(uname -m)" "$bp_hash" 2>/dev/null); then
+                if ! identity=$(cache_resolve_identity "$src" "$ver" "linux" "$(uname -m)" "$bp_hash" ); then
                         epr "Failed to resolve $tag ($src @ $ver)"
                         return 1
                 fi
