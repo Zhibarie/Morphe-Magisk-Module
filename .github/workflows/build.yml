@@ -211,8 +211,11 @@ jobs:
 
           echo "Pre-flight purge complete."
 
-      - name: Update config
+        - name: Update config
         if: ${{ inputs.from_ci }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: $GITHUB_REPOSITORY
         run: |
           if git checkout origin/update build.md; then
             UPDATE_CFG=$(./build.sh config.toml --config-update)
