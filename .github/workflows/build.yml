@@ -30,34 +30,21 @@ jobs:
           fetch-depth: 0
           submodules: true
 
-      # =====================================================================
-      # BDD test suite — verify cache.sh's 17 acceptance scenarios BEFORE
-      # running any build. If a regression slipped in, this fails fast and
-      # saves the cost of the build step. See tests/test_cache_bdd.sh.
-      # =====================================================================
       - name: Run cache BDD tests
         run: |
           bash tests/test_cache_bdd.sh
           echo "All 17 cache scenarios passed."
 
-      # =====================================================================
-      # Resolve versions from config.toml BEFORE setting up the cache.
-      # The resolved version strings become part of the cache key so that
-      # any new release of CLI / patches automatically invalidates the cache.
-      # =====================================================================
       - name: Resolve versions from config
         id: versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Extract top-level (main) defaults from config.toml.
-          # We only need the four values that drive cache invalidation.
           toml_value() {
-            # toml_value <key>  -> echoes the value of <key> from config.toml (top-level only)
             awk -v key="$1" '
-              /^[[:space:]]*#/ { next }                 # skip comments
-              /^[[:space:]]*\[/ { in_table = 1; next } # skip everything in any [table]
+              /^[[:space:]]*#/ { next }
+              /^[[:space:]]*\[/ { in_table = 1; next }
               !in_table && $0 ~ key"=" {
                 sub(/^[^=]*=[[:space:]]*/,"")
                 gsub(/^"|"$/,"")
@@ -71,12 +58,6 @@ jobs:
           PATCHES_SRC=$(toml_value patches-source); PATCHES_SRC=${PATCHES_SRC:-MorpheApp/morphe-patches}
           PATCHES_VER=$(toml_value patches-version); PATCHES_VER=${PATCHES_VER:-latest}
 
-          # Helper: resolve a "latest" / "stable" / "dev" / "vX.Y.Z" selector
-          # to an actual tag_name via GitHub API. Returns the tag_name (e.g. "v1.16.0").
-          # Also fetches the .assets[] array so the caller can derive the
-          # real asset basename (e.g. "morphe-desktop-1.16.0-all.jar" for
-          # morphe-desktop, "patches-1.43.0.mpp" for morphe-patches — note
-          # the different prefix and extension, which we must NOT hardcode).
           resolve_tag() {
             local repo="$1" sel="$2" out_json
             local base="https://api.github.com/repos/${repo}/releases"
@@ -85,8 +66,6 @@ jobs:
                 out_json=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$base/latest")
                 ;;
               dev)
-                # List all releases, pick the entry with the highest semver tag,
-                # then narrow the JSON to just that entry (its .assets[] is included).
                 out_json=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$base")
                 local picked
                 picked=$(jq -r '.[].tag_name' <<<"$out_json" \
@@ -100,12 +79,10 @@ jobs:
                 out_json=$(jq -r --arg t "$picked" '.[] | select(.tag_name == $t)' <<<"$out_json")
                 ;;
               *)
-                # explicit pin — tolerate both "1.16.0" and "v1.16.0"
                 local v="${sel#v}"
                 out_json=$(curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$base/tags/v${v}")
                 ;;
             esac
-            # Emit "<tag> <asset_name>" (single asset assumed; warn otherwise)
             local tag asset
             tag=$(jq -r '.tag_name' <<<"$out_json")
             asset=$(jq -r '.assets | map(select(.name | (endswith("asc") or endswith("json")) | not)) | .[0].name' <<<"$out_json")
@@ -133,13 +110,11 @@ jobs:
           echo "patches_tag=$PATCHES_TAG"   >> "$GITHUB_OUTPUT"
           echo "patches_asset=$PATCHES_ASSET" >> "$GITHUB_OUTPUT"
 
-          # Also export sanitized forms (no slashes) for use inside cache keys.
           CLI_REPO_SAFE=${CLI_SRC//\//-}
           PATCHES_REPO_SAFE=${PATCHES_SRC//\//-}
           echo "cli_repo_safe=$CLI_REPO_SAFE"          >> "$GITHUB_OUTPUT"
           echo "patches_repo_safe=$PATCHES_REPO_SAFE"  >> "$GITHUB_OUTPUT"
 
-          # Print a banner so the run log shows what was resolved.
           echo "─────────── resolved versions ───────────"
           echo "CLI     : $CLI_SRC @ $CLI_TAG ($CLI_ASSET)"
           echo "Patches : $PATCHES_SRC @ $PATCHES_TAG ($PATCHES_ASSET)"
@@ -151,24 +126,12 @@ jobs:
         with:
           path: |
             temp
-          # Cache key includes resolved versions so any new release of
-          # CLI/patches produces a fresh cache slot automatically — no more
-          # stale 1.14.0 JAR being reused when 1.16.0 is requested.
           key: stock-apks-${{ steps.versions.outputs.cli_repo_safe }}-${{ steps.versions.outputs.cli_tag }}-${{ steps.versions.outputs.patches_repo_safe }}-${{ steps.versions.outputs.patches_tag }}-${{ hashFiles('config.toml') }}-${{ github.run_id }}
           restore-keys: |
             stock-apks-${{ steps.versions.outputs.cli_repo_safe }}-${{ steps.versions.outputs.cli_tag }}-${{ steps.versions.outputs.patches_repo_safe }}-${{ steps.versions.outputs.patches_tag }}-${{ hashFiles('config.toml') }}-
             stock-apks-${{ steps.versions.outputs.cli_repo_safe }}-${{ steps.versions.outputs.cli_tag }}-${{ hashFiles('config.toml') }}-
             stock-apks-${{ hashFiles('config.toml') }}-
 
-      # =====================================================================
-      # Pre-flight cache hygiene — even if a restore-key matched an older
-      # cache, wipe any artifact whose basename doesn't match the resolved
-      # asset name. This is the CI-side mirror of purge_stale_jars() in utils.sh.
-      # We use the ACTUAL resolved asset name (from steps.versions.outputs.*_asset)
-      # rather than guessing the naming convention, because morphe-desktop uses
-      # `morphe-desktop-X.Y.Z-all.jar` while morphe-patches uses
-      # `patches-X.Y.Z.mpp` — different prefix, different extension.
-      # =====================================================================
       - name: Purge stale prebuilts (CI-side hygiene)
         env:
           CLI_ASSET: ${{ steps.versions.outputs.cli_asset }}
@@ -178,9 +141,6 @@ jobs:
           echo "Expected CLI asset basename    : $CLI_ASSET"
           echo "Expected patches asset basename: $PATCHES_ASSET"
 
-          # purge_stale_in <dir> <keep_basename>
-          # Derives "kind" = strip from first "-<digit>" onward, then deletes
-          # every regular file matching "${kind}-*" whose basename != keep.
           purge_stale_in() {
             local dir="$1" keep="$2"
             [ -d "$dir" ] || return 0
@@ -203,15 +163,13 @@ jobs:
             shopt -u nullglob
           }
 
-          # The temp dir name is derived from the repo ORG (lowercased) + "-rv".
-          # e.g. patches-source="MorpheApp/morphe-patches" -> temp/morpheapp-rv/
           [ -d temp/morpheapp-rv ] || mkdir -p temp/morpheapp-rv
           purge_stale_in temp/morpheapp-rv "$CLI_ASSET"
           purge_stale_in temp/morpheapp-rv "$PATCHES_ASSET"
 
           echo "Pre-flight purge complete."
 
-        - name: Update config
+      - name: Update config
         if: ${{ inputs.from_ci }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -381,9 +339,6 @@ jobs:
             echo "no changes!"
           fi
 
-      # =====================================================================
-      # Telegram notification — compact, mobile-friendly, auto-generated.
-      # =====================================================================
       - name: Report to Telegram
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
@@ -417,43 +372,29 @@ jobs:
             STABLE_LINKS=${STABLE_LINKS#"$NL"}
             DEV_LINKS=${DEV_LINKS#"$NL"}
 
-            # Build a compact, structured changelog from build.md.
-            # We extract:
-            #   - lines starting with "* " -> bullet
-            #   - "### X"    -> section header (replaced with emoji + label)
-            #   - the "Apps:" line -> ignored (we already list apps below)
-            #   - the "(version ...)" trailer on per-app lines -> kept
-            #   - any other paragraph -> truncated to ~80 chars
             BUILD_DIGEST=""
             CUR_LABEL=""
             while IFS= read -r line; do
               [ -z "$line" ] && continue
               case "$line" in
-                "### "*)   continue ;;  # skip section headers, we relabel below
+                "### "*)   continue ;;
                 "Apps:"*)  continue ;;
                 "* "*)
-                  # plain bullet line — keep it
                   txt="${line#\* }"
                   BUILD_DIGEST+="${NL}- ${txt:0:120}"
                   ;;
                 *)
-                  # any other non-empty line — truncate
                   BUILD_DIGEST+="${NL}- ${line:0:120}"
                   ;;
               esac
             done < build.tmp
             BUILD_DIGEST=${BUILD_DIGEST#"$NL"}
 
-            # Stable / Dev counts
             STABLE_COUNT=$(ls -1 build-stable 2>/dev/null | wc -l)
             DEV_COUNT=$(ls -1 build-dev 2>/dev/null | wc -l)
 
             NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
 
-            # Build the Telegram message as a single-line variable joined by
-            # explicit $NL. This is safer than a multi-line bash literal inside
-            # a YAML `run: |` block (which would require careful indentation of
-            # every body line).
             MSG=""
             MSG+="*Morphe Magisk Module — Update*${NL}${NL}"
             MSG+="*Build*${NL}"
