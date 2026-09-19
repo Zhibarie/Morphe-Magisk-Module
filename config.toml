@@ -1,71 +1,102 @@
+# =============================================================================
+# Morphe Magisk Module — Build Configuration (refactored)
+# =============================================================================
+# Centralized defaults live in the top-level (main) section below.
+# Per-app sections only need to override what they want changed
+# (e.g., patches-version = "dev" for pre-release builds).
+#
+# Version selectors supported:
+#   "latest"  → newest stable release (excludes pre-releases)
+#   "stable"  → alias for "latest"
+#   "dev"     → newest dev/pre-release tag (highest semver, incl. -dev.N)
+#   "v1.16.0" → pin to an explicit tag (the leading "v" is optional)
+#
+# Source selectors can be any "OWNER/REPO" string on GitHub.
+# Defaults point to the renamed repository "MorpheApp/morphe-desktop"
+# (it used to be "MorpheApp/morphe-cli"; relying on the redirect was fragile).
+# =============================================================================
+
 enable-module-update = true
 parallel-jobs = 1
+compression-level = 9
+remove-rv-integrations-checks = true
 
-# ============================================================
-# DUAL BUILD CONFIG: DEV (prerelease) + STABLE (release)
-# ============================================================
-# Setiap build akan menghasilkan 2 versi per aplikasi:
-# - Dev:    Patch terbaru (mungkin ada bug, fitur eksperimental)
-# - Stable: Patch stabil (teruji, lebih reliable)
-#
-# User bisa pilih sendiri mau pakai yang mana.
-# Keduanya bisa coexist (install bersamaan) karena module-prop-name beda.
-# ============================================================
+# ---- Centralized source/version defaults ----
+# Any [App-X] section that does NOT override these inherits them.
+cli-source      = "MorpheApp/morphe-desktop"
+cli-version     = "latest"
 
+patches-source  = "MorpheApp/morphe-patches"
+patches-version = "latest"
 
-# ===== YOUTUBE - DEV (Prerelease) =====
+rv-brand        = "Morphe"
+
+# ---- Cache policy (consumed by cache.sh, see tests/test_cache_bdd.sh) ----
+# These map directly to the 17 acceptance criteria for the artifact cache:
+#   - retention_count   : how many stale versions per "kind" to keep for rollback
+#   - retention_age_days: delete stale entries older than N days (0 = disable)
+#   - fallback_allowed  : if true, use a stale cached copy when fresh download fails
+#   - fallback_status   : which statuses are eligible for fallback (comma-separated)
+#   - lock_timeout      : seconds to wait for an flock before giving up
+# All values are also overridable via environment variables of the same name
+# (CACHE_RETENTION_COUNT, CACHE_FALLBACK_ALLOWED, etc.).
+[cache]
+retention_count    = 2
+retention_age_days = 30
+fallback_allowed   = true
+fallback_status    = "stale"
+lock_timeout       = 30
+
+# =============================================================================
+# App configurations
+# =============================================================================
+# Set patches-version per-app to differentiate "dev" vs "stable" builds.
+# The CLI version is shared (inherited from main) by default — bumping the
+# CLI in one place automatically updates every app.
+# =============================================================================
+
+# ---------- YouTube (Dev / Prerelease) ----------
 [YouTube-Morphe-Dev]
-app-name = "YouTube"
-patches-source = "MorpheApp/morphe-patches"
-cli-source = "MorpheApp/morphe-cli"
-patches-version = "dev"
-rv-brand = "Morphe-Dev"
-build-mode = "both"
-apkmirror-dlurl = "https://www.apkmirror.com/apk/google-inc/youtube"
-uptodown-dlurl = "https://youtube.en.uptodown.com/android"
-archive-dlurl = "https://archive.org/download/jhc-apks/apks/com.google.android.youtube"
-module-prop-name = "youtube-morphe-dev"
+app-name          = "YouTube"
+patches-version   = "dev"
+rv-brand          = "Morphe-Dev"
+build-mode        = "both"
+apkmirror-dlurl   = "https://www.apkmirror.com/apk/google-inc/youtube"
+uptodown-dlurl    = "https://youtube.en.uptodown.com/android"
+archive-dlurl     = "https://archive.org/download/jhc-apks/apks/com.google.android.youtube"
+module-prop-name  = "youtube-morphe-dev"
 
-
-# ===== YOUTUBE - STABLE (Release) =====
+# ---------- YouTube (Stable / Release) ----------
 [YouTube-Morphe-Stable]
-app-name = "YouTube"
-patches-source = "MorpheApp/morphe-patches"
-cli-source = "MorpheApp/morphe-cli"
-patches-version = "latest"
-rv-brand = "Morphe"
-build-mode = "both"
-apkmirror-dlurl = "https://www.apkmirror.com/apk/google-inc/youtube"
-uptodown-dlurl = "https://youtube.en.uptodown.com/android"
-archive-dlurl = "https://archive.org/download/jhc-apks/apks/com.google.android.youtube"
-module-prop-name = "youtube-morphe-stable"
+app-name          = "YouTube"
+patches-version   = "stable"
+rv-brand          = "Morphe"
+build-mode        = "both"
+apkmirror-dlurl   = "https://www.apkmirror.com/apk/google-inc/youtube"
+uptodown-dlurl    = "https://youtube.en.uptodown.com/android"
+archive-dlurl     = "https://archive.org/download/jhc-apks/apks/com.google.android.youtube"
+module-prop-name  = "youtube-morphe-stable"
 
-
-# ===== YOUTUBE MUSIC - DEV (Prerelease) =====
+# ---------- YouTube Music (Dev / Prerelease) ----------
 [Music-Morphe-Dev]
-app-name = "Music"
-patches-source = "MorpheApp/morphe-patches"
-cli-source = "MorpheApp/morphe-cli"
-patches-version = "dev"
-rv-brand = "Morphe-Dev"
-build-mode = "both"
-arch = "both"
-apkmirror-dlurl = "https://www.apkmirror.com/apk/google-inc/youtube-music"
-uptodown-dlurl = "https://youtube-music.en.uptodown.com/android"
-archive-dlurl = "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music"
-module-prop-name = "music-morphe-dev"
+app-name          = "Music"
+patches-version   = "dev"
+rv-brand          = "Morphe-Dev"
+build-mode        = "both"
+arch              = "both"
+apkmirror-dlurl   = "https://www.apkmirror.com/apk/google-inc/youtube-music"
+uptodown-dlurl    = "https://youtube-music.en.uptodown.com/android"
+archive-dlurl     = "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music"
+module-prop-name  = "music-morphe-dev"
 
-
-# ===== YOUTUBE MUSIC - STABLE (Release) =====
+# ---------- YouTube Music (Stable / Release) ----------
 [Music-Morphe-Stable]
-app-name = "Music"
-patches-source = "MorpheApp/morphe-patches"
-cli-source = "MorpheApp/morphe-cli"
-patches-version = "latest"
-rv-brand = "Morphe"
-build-mode = "both"
-arch = "both"
-apkmirror-dlurl = "https://www.apkmirror.com/apk/google-inc/youtube-music"
-uptodown-dlurl = "https://youtube-music.en.uptodown.com/android"
-archive-dlurl = "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music"
-module-prop-name = "music-morphe-stable"
+app-name          = "Music"
+patches-version   = "stable"
+rv-brand          = "Morphe"
+build-mode        = "both"
+arch              = "both"
+apkmirror-dlurl   = "https://www.apkmirror.com/apk/google-inc/youtube-music"
+uptodown-dlurl    = "https://youtube-music.en.uptodown.com/android"
+archive-dlurl     = "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music"
+module-prop-name  = "music-morphe-stable"

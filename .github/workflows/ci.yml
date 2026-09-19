@@ -19,6 +19,36 @@ jobs:
         with:
           fetch-depth: 0
 
+      # =====================================================================
+      # Resolve versions from config.toml. We need them here too so the
+      # `check` job can compare against the last build's build.md and
+      # decide whether SHOULD_BUILD should fire.
+      # =====================================================================
+      - name: Read config defaults
+        id: cfg
+        run: |
+          set -euo pipefail
+          toml_value() {
+            awk -v key="$1" '
+              /^[[:space:]]*#/ { next }
+              /^[[:space:]]*\[/ { in_table = 1; next }
+              !in_table && $0 ~ key"=" {
+                sub(/^[^=]*=[[:space:]]*/,"")
+                gsub(/^"|"$/,"")
+                print
+                exit
+              }
+            ' config.toml
+          }
+          CLI_SRC=$(toml_value cli-source);       CLI_SRC=${CLI_SRC:-MorpheApp/morphe-desktop}
+          CLI_VER=$(toml_value cli-version);     CLI_VER=${CLI_VER:-latest}
+          PATCHES_SRC=$(toml_value patches-source); PATCHES_SRC=${PATCHES_SRC:-MorpheApp/morphe-patches}
+          PATCHES_VER=$(toml_value patches-version); PATCHES_VER=${PATCHES_VER:-latest}
+          echo "cli_src=$CLI_SRC"          >> "$GITHUB_OUTPUT"
+          echo "cli_ver=$CLI_VER"           >> "$GITHUB_OUTPUT"
+          echo "patches_src=$PATCHES_SRC"  >> "$GITHUB_OUTPUT"
+          echo "patches_ver=$PATCHES_VER"   >> "$GITHUB_OUTPUT"
+
       - name: Should build?
         id: should_build
         shell: bash
@@ -38,6 +68,12 @@ jobs:
             fi
           fi
 
+      # =====================================================================
+      # Clean older workflow runs (kept from the original CI) — also serves
+      # as an indirect cache hygiene because the build job's cache key now
+      # encodes the resolved CLI/patches tags, so stale caches simply don't
+      # get matched anymore.
+      # =====================================================================
       - name: Clear older runs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,6 +82,10 @@ jobs:
 
     outputs:
       SHOULD_BUILD: ${{ steps.should_build.outputs.SHOULD_BUILD }}
+      CLI_SRC: ${{ steps.cfg.outputs.cli_src }}
+      CLI_VER: ${{ steps.cfg.outputs.cli_ver }}
+      PATCHES_SRC: ${{ steps.cfg.outputs.patches_src }}
+      PATCHES_VER: ${{ steps.cfg.outputs.patches_ver }}
 
   build:
     permissions: write-all
