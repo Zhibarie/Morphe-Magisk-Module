@@ -213,6 +213,17 @@ jobs:
             fi
           done
 
+      - name: Capture previous build.md
+        if: ${{ inputs.from_ci }}
+        run: |
+          if [ -f build.md ]; then
+            cp -f build.md build.old.tmp
+            echo "Captured previous build.md for version comparison"
+          else
+            touch build.old.tmp
+            echo "No previous build.md found (first build or fresh checkout)"
+          fi
+
       - name: Build modules/APKs
         run: if [ -f "config.json" ]; then ./build.sh config.json; else ./build.sh config.toml; fi
         env:
@@ -348,77 +359,237 @@ jobs:
         if: env.TG_TOKEN != null
         run: |
           (
-            TG_CHAT="1067754962"
             NL=$'\n'
-            STABLE_LINKS=""
-            DEV_LINKS=""
 
-            for OUTPUT in build-stable/*; do
-              [ -f "$OUTPUT" ] || continue
-              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/stable-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-stable/}"
-              if [[ $OUTPUT = *.apk ]] || [[ $OUTPUT = *.zip ]]; then
-                STABLE_LINKS+="${NL}- ${OUTPUT#build-stable/}"
-              fi
-            done
+            # ---- Helper functions ----
+            trim() {
+              local s="$1"
+              s="${s#"${s%%[![:space:]]*}"}"
+              s="${s%"${s##*[![:space:]]}"}"
+              echo "$s"
+            }
 
-            for OUTPUT in build-dev/*; do
-              [ -f "$OUTPUT" ] || continue
-              DL_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-${{ steps.next_ver_code.outputs.NEXT_VER_CODE }}/${OUTPUT#build-dev/}"
-              if [[ $OUTPUT = *.apk ]] || [[ $OUTPUT = *.zip ]]; then
-                DEV_LINKS+="${NL}- ${OUTPUT#build-dev/}"
-              fi
-            done
+            is_link_only() {
+              case "$1" in
+                \[*\]\(*\)) return 0 ;;
+                *) return 1 ;;
+              esac
+            }
 
-            STABLE_LINKS=${STABLE_LINKS#"$NL"}
-            DEV_LINKS=${DEV_LINKS#"$NL"}
+            extract_app_name() {
+              local table="$1"
+              table="${table%%-Morphe-*}"
+              echo "$table"
+            }
 
-            BUILD_DIGEST=""
-            CUR_LABEL=""
+            # ---- Parse build.tmp into sections ----
+            STABLE_VERSIONS=""
+            DEV_VERSIONS=""
+            CHANGELOG_ENTRIES=""
+            SKIPPED_ENTRIES=""
+            ADDITIONAL_LINKS=""
+            IN_SKIPPED=false
+
             while IFS= read -r line; do
+              line=$(trim "$line")
               [ -z "$line" ] && continue
+
               case "$line" in
-                "### "*)   continue ;;
-                "Apps:"*)  continue ;;
-                "* "*)
-                  txt="${line#\* }"
-                  BUILD_DIGEST+="${NL}- ${txt:0:120}"
-                  ;;
-                *)
-                  BUILD_DIGEST+="${NL}- ${line:0:120}"
+                "### "*) continue ;;
+                "Apps:"*) continue ;;
+                Skipped:*)
+                  IN_SKIPPED=true
+                  continue
                   ;;
               esac
+
+              if [ "$IN_SKIPPED" = true ]; then
+                if ! is_link_only "$line"; then
+                  SKIPPED_ENTRIES+="${NL}- ${line:0:120}"
+                fi
+                continue
+              fi
+
+              # App version lines (contain "-Morphe-" and ":")
+              if [[ "$line" == *"-Morphe-"*":"* ]]; then
+                table_name="${line%%:*}"
+                table_name="${table_name%% (*}"
+                table_name=$(trim "$table_name")
+                version="${line##*:}"
+                version=$(trim "$version")
+                app_name=$(extract_app_name "$table_name")
+                [ -z "$version" ] && continue
+
+                case "$table_name" in
+                  *-Stable) STABLE_VERSIONS+="${NL}${app_name} ${version}" ;;
+                  *-Dev)    DEV_VERSIONS+="${NL}${app_name} ${version}" ;;
+                esac
+                CHANGELOG_ENTRIES+="${NL}- ${line:0:120}"
+                continue
+              fi
+
+              # Markdown link-only lines
+              if is_link_only "$line"; then
+                case "$line" in
+                  "[Changelog]"*) continue ;;
+                esac
+                ADDITIONAL_LINKS+="${NL}- ${line:0:200}"
+                continue
+              fi
+
+              # Instruction lines with inline markdown links
+              if [[ "$line" =~ \[.*\]\(.*\) ]]; then
+                ADDITIONAL_LINKS+="${NL}- ${line:0:200}"
+                continue
+              fi
+
+              # Skip artifact metadata (Patches:/CLI:)
+              case "$line" in
+                Patches:*|CLI:*) continue ;;
+              esac
+
+              # Unknown informative line → keep in changelog
+              CHANGELOG_ENTRIES+="${NL}- ${line:0:120}"
             done < build.tmp
-            BUILD_DIGEST=${BUILD_DIGEST#"$NL"}
 
-            STABLE_COUNT=$(ls -1 build-stable 2>/dev/null | wc -l)
-            DEV_COUNT=$(ls -1 build-dev 2>/dev/null | wc -l)
+            STABLE_VERSIONS=${STABLE_VERSIONS#"$NL"}
+            DEV_VERSIONS=${DEV_VERSIONS#"$NL"}
+            CHANGELOG_ENTRIES=${CHANGELOG_ENTRIES#"$NL"}
+            SKIPPED_ENTRIES=${SKIPPED_ENTRIES#"$NL"}
+            ADDITIONAL_LINKS=${ADDITIONAL_LINKS#"$NL"}
 
-            NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
+            # ---- Deduplicate channel versions by app name ----
+            dedupe_versions() {
+              local input="$1" seen="" result=""
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                local app="${line%% *}"
+                if ! grep -q "^${app}$" <<<"$seen" 2>/dev/null; then
+                  seen+="${app}"$'\n'
+                  result+="${line}"$'\n'
+                fi
+              done <<<"$input"
+              result=$(trim "$result")
+              echo "$result"
+            }
 
+            STABLE_VERSIONS=$(dedupe_versions "$STABLE_VERSIONS")
+            DEV_VERSIONS=$(dedupe_versions "$DEV_VERSIONS")
+
+            # ---- Build Upgrade section (compare old vs new) ----
+            UPGRADE_ENTRIES=""
+            if [ -f build.old.tmp ]; then
+              declare -A OLD_VERSIONS NEW_VERSIONS
+
+              while IFS= read -r line; do
+                line=$(trim "$line")
+                [ -z "$line" ] && continue
+                if [[ "$line" == *"-Morphe-"*":"* ]]; then
+                  table_name="${line%%:*}"
+                  table_name="${table_name%% (*}"
+                  table_name=$(trim "$table_name")
+                  version="${line##*:}"
+                  version=$(trim "$version")
+                  app_name=$(extract_app_name "$table_name")
+                  [ -z "$version" ] && continue
+                  [ -z "${OLD_VERSIONS[$app_name]:-}" ] && OLD_VERSIONS[$app_name]="$version"
+                fi
+              done < build.old.tmp
+
+              while IFS= read -r line; do
+                line=$(trim "$line")
+                [ -z "$line" ] && continue
+                if [[ "$line" == *"-Morphe-"*":"* ]]; then
+                  table_name="${line%%:*}"
+                  table_name="${table_name%% (*}"
+                  table_name=$(trim "$table_name")
+                  version="${line##*:}"
+                  version=$(trim "$version")
+                  app_name=$(extract_app_name "$table_name")
+                  [ -z "$version" ] && continue
+                  [ -z "${NEW_VERSIONS[$app_name]:-}" ] && NEW_VERSIONS[$app_name]="$version"
+                fi
+              done < build.tmp
+
+              for app in "${!NEW_VERSIONS[@]}"; do
+                new_ver="${NEW_VERSIONS[$app]}"
+                old_ver="${OLD_VERSIONS[$app]:-}"
+                if [ -n "$old_ver" ] && [ "$old_ver" != "$new_ver" ]; then
+                  UPGRADE_ENTRIES+="${NL}- ${app}: ${old_ver} → ${new_ver}"
+                fi
+              done
+              UPGRADE_ENTRIES=${UPGRADE_ENTRIES#"$NL"}
+            fi
+
+            # ---- Build Stable Downloads ----
+            STABLE_COUNT=0
+            STABLE_DOWNLOADS=""
+            if [ -d build-stable ]; then
+              for f in build-stable/*; do
+                [ -f "$f" ] || continue
+                case "$f" in *.apk|*.zip) ;; *) continue ;; esac
+                STABLE_COUNT=$((STABLE_COUNT + 1))
+                bn=$(basename "$f")
+                url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/stable-${BUILD_VER}/${bn}"
+                printf -v dl_line '\n- [%s](%s)' "$bn" "$url"
+                STABLE_DOWNLOADS+="$dl_line"
+              done
+            fi
+            STABLE_DOWNLOADS=${STABLE_DOWNLOADS#"$NL"}
+
+            # ---- Build Dev Downloads ----
+            DEV_COUNT=0
+            DEV_DOWNLOADS=""
+            if [ -d build-dev ]; then
+              for f in build-dev/*; do
+                [ -f "$f" ] || continue
+                case "$f" in *.apk|*.zip) ;; *) continue ;; esac
+                DEV_COUNT=$((DEV_COUNT + 1))
+                bn=$(basename "$f")
+                url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/dev-${BUILD_VER}/${bn}"
+                printf -v dl_line '\n- [%s](%s)' "$bn" "$url"
+                DEV_DOWNLOADS+="$dl_line"
+              done
+            fi
+            DEV_DOWNLOADS=${DEV_DOWNLOADS#"$NL"}
+
+            # ---- Determine header status ----
+            LIMITED=false
+            [ -z "$BUILD_VER" ] && LIMITED=true
+            [ -z "$CLI_TAG" ] && LIMITED=true
+            [ -z "$PATCHES_TAG" ] && LIMITED=true
+            [ "$STABLE_COUNT" -eq 0 ] && [ "$DEV_COUNT" -eq 0 ] && LIMITED=true
+
+            if [ "$LIMITED" = true ]; then
+              HEADER="Morphe build completed with limited information"
+            else
+              HEADER="Morphe build complete"
+            fi
+
+            # ---- Assemble message ----
             MSG=""
-            MSG+="*Morphe Magisk Module — Update*${NL}${NL}"
-            MSG+="*Build*${NL}"
-            MSG+="- Version : v${BUILD_VER}${NL}"
-            MSG+="- CLI     : \`${CLI_TAG}\`${NL}"
-            MSG+="- Patches : \`${PATCHES_TAG}\`${NL}"
-            MSG+="- Date    : ${NOW}${NL}${NL}"
-            MSG+="*Artifacts*${NL}"
-            MSG+="- Stable  : ${STABLE_COUNT} file(s)${NL}"
-            MSG+="- Dev     : ${DEV_COUNT} file(s)${NL}${NL}"
-            MSG+="*Changelog*${NL}"
-            MSG+="${BUILD_DIGEST}${NL}${NL}"
-            MSG+="*Stable Release*${NL}"
-            MSG+="${STABLE_LINKS:-(no stable files)}${NL}${NL}"
-            MSG+="*Dev Release (Pre-release)*${NL}"
-            MSG+="${DEV_LINKS:-(no dev files)}"
+            MSG+="${HEADER}${NL}${NL}"
 
+            [ -n "$STABLE_VERSIONS" ]  && MSG+="*Stable*${NL}${STABLE_VERSIONS}${NL}${NL}"
+            [ -n "$DEV_VERSIONS" ]     && MSG+="*Dev*${NL}${DEV_VERSIONS}${NL}${NL}"
+            [ -n "$CHANGELOG_ENTRIES" ] && MSG+="*Changelog*${NL}${CHANGELOG_ENTRIES}${NL}${NL}"
+            [ -n "$UPGRADE_ENTRIES" ]  && MSG+="*Upgrade*${NL}${UPGRADE_ENTRIES}${NL}${NL}"
+            [ -n "$SKIPPED_ENTRIES" ]  && MSG+="*Skipped*${NL}${SKIPPED_ENTRIES}${NL}${NL}"
+            [ -n "$STABLE_DOWNLOADS" ] && MSG+="*Stable Downloads*${NL}${STABLE_DOWNLOADS}${NL}${NL}"
+            [ -n "$DEV_DOWNLOADS" ]    && MSG+="*Dev Downloads*${NL}${DEV_DOWNLOADS}${NL}${NL}"
+            [ -n "$ADDITIONAL_LINKS" ] && MSG+="*Additional*${NL}${ADDITIONAL_LINKS}"
+
+            MSG="${MSG%"${NL}"}"
+            MSG="${MSG%"${NL}"}"
+
+            # ---- Send to Telegram ----
             POST="https://api.telegram.org/bot${TG_TOKEN}/sendMessage"
             for attempt in 1 2 3; do
               RESPONSE=$(curl -sS --max-time 10 -X POST \
                 --data-urlencode "parse_mode=Markdown" \
                 --data-urlencode "disable_web_page_preview=true" \
-                --data-urlencode "text=${MSG:0:9450}" \
-                --data-urlencode "chat_id=${TG_CHAT}" \
+                --data-urlencode "text=${MSG:0:4096}" \
+                --data-urlencode "chat_id=1067754962" \
                 "$POST")
               if echo "$RESPONSE" | grep -q '"ok":true'; then
                 echo "Telegram notif sent (attempt $attempt)"
