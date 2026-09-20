@@ -286,7 +286,7 @@ cache_lookup() {
         meta_json=$(_cache_meta_read "$artifact") || {
                 cache_log_warn "decision=invalid artifact=$artifact reason=meta_missing_or_corrupt"
                 return 1
-        fi
+        }
 
         local m_repo m_tag m_sha m_checksum m_size m_platform m_arch m_bp m_status
         m_repo=$(jq -r '.source_repo // empty'    <<<"$meta_json")
