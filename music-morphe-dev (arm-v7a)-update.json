@@ -1,6 +1,6 @@
 {
   "version": "v9.36.50 (patches dev.11.mpp)",
-  "versionCode": 16,
-  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/dev-16/music-morphe-dev-module-v9.36.50-arm-v7a.zip",
+  "versionCode": 17,
+  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/dev-17/music-morphe-dev-module-v9.36.50-arm-v7a.zip",
   "changelog": "https://raw.githubusercontent.com/Zhibarie/Morphe-Magisk-Module/update/build.md"
 }
