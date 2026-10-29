@@ -1,6 +1,6 @@
 {
   "version": "v9.42.52 (patches 1.48.0.mpp)",
-  "versionCode": 56,
-  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/stable-56/music-morphe-module-v9.42.52-arm64-v8a.zip",
+  "versionCode": 57,
+  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/stable-57/music-morphe-module-v9.42.52-arm64-v8a.zip",
   "changelog": "https://raw.githubusercontent.com/Zhibarie/Morphe-Magisk-Module/update/build.md"
 }
