@@ -1,5 +1,7 @@
 Music-Morphe-Dev (arm64-v8a): 9.43.51  
+Music-Morphe-Dev (arm-v7a): 9.43.51  
 Music-Morphe-Stable (arm64-v8a): 9.43.51  
+Music-Morphe-Stable (arm-v7a): 9.43.51  
 YouTube-Morphe-Dev: 21.43.523  
 YouTube-Morphe-Stable: 21.43.523  
 
@@ -8,7 +10,7 @@ Use [zygisk-detach](https://github.com/j-hc/zygisk-detach) to detach YouTube and
 
 [revanced-magisk-module](https://github.com/j-hc/revanced-magisk-module)
   
-[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.0.0-dev.4)
+[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.1.0-dev.4)
 [Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.0.0)
-[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.0.0-dev.4)
+[Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.1.0-dev.4)
 [Changelog](https://github.com/MorpheApp/morphe-patches/releases/tag/v2.0.0)  
