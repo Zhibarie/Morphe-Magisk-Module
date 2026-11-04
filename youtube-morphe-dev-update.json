@@ -1,6 +1,6 @@
 {
-  "version": "v21.43.523 (patches dev.7.mpp)",
-  "versionCode": 62,
-  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/dev-62/youtube-morphe-dev-module-v21.43.523-all.zip",
+  "version": "v21.43.523 (patches dev.10.mpp)",
+  "versionCode": 63,
+  "zipUrl": "https://github.com/Zhibarie/Morphe-Magisk-Module/releases/download/dev-63/youtube-morphe-dev-module-v21.43.523-all.zip",
   "changelog": "https://raw.githubusercontent.com/Zhibarie/Morphe-Magisk-Module/update/build.md"
 }
